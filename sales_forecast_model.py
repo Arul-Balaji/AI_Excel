@@ -1,231 +1,114 @@
-import xlwings as xw
+import openpyxl
 import pandas as pd
 from datetime import datetime
 import os
-
+import shutil
 
 class SalesForecastModel:
     """
-    A class to interact with the Microsoft Sales Forecast Tracker spreadsheet.
-    Provides methods to add forecast inputs and read forecast outputs.
+    A class to interact with the Microsoft Sales Forecast Tracker spreadsheet using openpyxl.
     """
-    
+
     def __init__(self, file_path="microsoft_Sales forecast tracker small business.xlsx"):
         """
         Initialize the SalesForecastModel with the path to the Excel file.
-        
-        Args:
-            file_path (str): Path to the Excel file
         """
+        self.name = "sales_forecast"
         self.file_path = file_path
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Excel file not found: {file_path}")
-    
-    def inspect_spreadsheet(self):
-        """
-        Inspect the spreadsheet structure and print information about both tabs.
-        """
-        print(f"Inspecting spreadsheet: {self.file_path}\n")
-        
-        # Open the workbook (visible=False means it opens in background)
-        wb = xw.Book(self.file_path)
-        
-        try:
-            # List all sheets
-            print("Available sheets:")
-            for sheet in wb.sheets:
-                print(f"  - {sheet.name}")
-            print()
-            
-            # Inspect 'Forecast input' tab
-            if 'Forecast input' in [s.name for s in wb.sheets]:
-                input_sheet = wb.sheets['Forecast input']
-                print("=== FORECAST INPUT TAB ===")
-                
-                # Headers are in row 6, starting from column B
-                headers = input_sheet.range('B6:J6').value
-                print(f"Headers (Row 6, Columns B-J): {headers}")
-                
-                # Find the last row with data in column B
-                last_row = input_sheet.range('B7').end('down').row
-                print(f"Last row with data: {last_row}")
-                print(f"Number of data rows: {last_row - 6}")
-                
-                # Show first few rows of data
-                data_range = input_sheet.range(f'B6:J{min(last_row, 10)}').value
-                df = pd.DataFrame(data_range[1:], columns=data_range[0])
-                print(f"\nFirst few rows:\n{df}\n")
-            
-            # Inspect 'Sales forecast' tab
-            if 'Sales forecast' in [s.name for s in wb.sheets]:
-                forecast_sheet = wb.sheets['Sales forecast']
-                print("=== SALES FORECAST TAB ===")
-                
-                # Headers are in row 6, columns B-D contain the main forecast data
-                headers = forecast_sheet.range('B6:D6').value
-                print(f"Headers (Row 6, Columns B-D): {headers}")
-                
-                # Find the last row with data in column B
-                last_row = forecast_sheet.range('B7').end('down').row
-                print(f"Last row with data: {last_row}")
-                print(f"Number of forecast months: {last_row - 6}")
-                
-                # Show forecast data
-                data_range = forecast_sheet.range(f'B6:D{last_row}').value
-                df = pd.DataFrame(data_range[1:], columns=data_range[0])
-                print(f"\nForecast data:\n{df}\n")
-        
-        finally:
-            # Close the workbook without saving
-            wb.close()
-    
+
+    def _get_last_row(self, sheet, column_letter):
+        """Helper to find the last row with data in a given column, starting from the bottom."""
+        for cell in sheet[column_letter][::-1]:
+            # Data starts below row 6
+            if cell.row > 6 and cell.value is not None:
+                return cell.row
+        return 6 # If no data, return the header row
+
     def add_forecast_input_row(self, data_dict):
         """
-        Add a new row to the 'Forecast input' tab.
-        
-        Args:
-            data_dict (dict): Dictionary with column names as keys and values to insert
-                             Example: {
-                                 'Opportunity name': 'New Client Corp',
-                                 'Sales agent': 'John Doe',
-                                 'Sales region': 'US - Northeast',
-                                 'Sales category': 'Consulting',
-                                 'Forecast amount': 200000,
-                                 'Sales phase': 'Needs analysis',
-                                 'Probability of sale': 0.5,
-                                 'Forecast close': datetime(2026, 12, 1),
-                                 'Weighted forecast': 100000
-                             }
-        
-        Returns:
-            int: Row number where data was inserted
+        Add a new row to the 'Forecast input' tab using openpyxl.
         """
-        wb = xw.Book(self.file_path)
-        
-        try:
-            input_sheet = wb.sheets['Forecast input']
-            
-            # Get headers from row 6, columns B-J
-            headers = input_sheet.range('B6:J6').value
-            
-            # Find the last row with data in column B
-            last_row = input_sheet.range('B7').end('down').row
-            new_row = last_row + 1
-            
-            # Prepare data in the correct column order
-            row_data = []
-            for header in headers:
-                row_data.append(data_dict.get(header, ''))
-            
-            # Write the new row starting from column B
-            input_sheet.range(f'B{new_row}').value = row_data
-            
-            # Save the workbook
-            wb.save()
-            
-            print(f"Successfully added new row at row {new_row}")
-            print(f"Data: {dict(zip(headers, row_data))}")
-            
-            return new_row
-        
-        finally:
-            wb.close()
-    
+        wb = openpyxl.load_workbook(self.file_path)
+        input_sheet = wb['Forecast input']
+
+        # Headers are in B6:J6 (columns 2 to 10)
+        headers = [cell.value for cell in input_sheet[6][1:10]]
+        last_row = self._get_last_row(input_sheet, 'B')
+        new_row = last_row + 1
+
+        # Prepare data in the correct column order
+        row_data = [data_dict.get(h, '') for h in headers]
+
+        # Write the new row starting from column B (column index 2)
+        for col_idx, value in enumerate(row_data, 2):
+            input_sheet.cell(row=new_row, column=col_idx, value=value)
+
+        wb.save(self.file_path)
+        print(f"Successfully added new row at row {new_row}")
+        return new_row
+
     def read_sales_forecast(self, as_dataframe=True):
         """
-        Read forecast outputs from the 'Sales forecast' tab.
-        
-        Args:
-            as_dataframe (bool): If True, return as pandas DataFrame; if False, return as list of lists
-        
-        Returns:
-            pd.DataFrame or list: Forecast data with columns: Month, Monthly Forecast, Cumulative
+        Read forecast outputs from the 'Sales forecast' tab using openpyxl.
         """
-        wb = xw.Book(self.file_path)
-        
-        try:
-            forecast_sheet = wb.sheets['Sales forecast']
-            
-            # Get forecast data from columns B-D, starting from row 6
-            # Find the last row with data in column B
-            last_row = forecast_sheet.range('B7').end('down').row
-            
-            # Read the data including headers
-            data = forecast_sheet.range(f'B6:D{last_row}').value
-            
-            if as_dataframe:
-                # Convert to DataFrame (first row as headers)
-                if data and len(data) > 1:
-                    df = pd.DataFrame(data[1:], columns=data[0])
-                    print(f"Read {len(df)} forecast rows from 'Sales forecast' tab")
-                    return df
-                else:
-                    print("No data found in 'Sales forecast' tab")
-                    return pd.DataFrame()
-            else:
-                print(f"Read {len(data)-1} forecast rows from 'Sales forecast' tab")
-                return data
-        
-        finally:
-            wb.close()
-    
-    def read_sales_forecast_range(self, range_address):
-        """
-        Read a specific range from the 'sales forecast' tab.
-        
-        Args:
-            range_address (str): Excel range address (e.g., 'A1:D10')
-        
-        Returns:
-            list: Data from the specified range
-        """
-        wb = xw.Book(self.file_path)
-        
-        try:
-            forecast_sheet = wb.sheets['Sales forecast']
-            data = forecast_sheet.range(range_address).value
-            
-            print(f"Read range {range_address} from 'sales forecast' tab")
-            return data
-        
-        finally:
-            wb.close()
+        wb = openpyxl.load_workbook(self.file_path, data_only=True)
+        forecast_sheet = wb['Sales forecast']
 
+        last_row = self._get_last_row(forecast_sheet, 'B')
+
+        # Data is in columns B, C, D (2, 3, 4)
+        data = list(forecast_sheet.iter_rows(min_row=6, max_row=last_row, min_col=2, max_col=4, values_only=True))
+
+        if as_dataframe:
+            if len(data) < 2: # Need at least headers and one row of data
+                return pd.DataFrame()
+            headers = data[0]
+            df = pd.DataFrame(data[1:], columns=headers)
+            return df
+        return data
 
 # Example usage
 if __name__ == "__main__":
-    # Initialize the model
-    model = SalesForecastModel("microsoft_Sales forecast tracker small business.xlsx")
-    
-    # Inspect the spreadsheet structure
+    file_path = "microsoft_Sales forecast tracker small business.xlsx"
+    backup_path = f"{file_path}.bak"
+
+    # Create a backup if it doesn't exist, otherwise restore from it for a clean run
+    if not os.path.exists(backup_path):
+        shutil.copy(file_path, backup_path)
+    else:
+        shutil.copy(backup_path, file_path)
+
+    model = SalesForecastModel(file_path)
+
     print("=" * 80)
-    print("INSPECTING SPREADSHEET")
+    print("READING SALES FORECAST DATA (openpyxl)")
     print("=" * 80)
-    model.inspect_spreadsheet()
-    
-    # Example: Add a new row to forecast input
-    # Uncomment and modify the data_dict based on your actual column structure
+    forecast_df = model.read_sales_forecast()
+    print(forecast_df.head())
+
+    if not forecast_df.empty:
+        # Use string casting to safely search for column names
+        monthly_forecast_col = [col for col in forecast_df.columns if 'Monthly' in str(col)][0]
+        cumulative_col = [col for col in forecast_df.columns if 'Cumulative' in str(col)][0]
+
+        print(f"\nTotal Monthly Forecast: ${forecast_df[monthly_forecast_col].sum():,.2f}")
+        print(f"Final Cumulative: ${forecast_df[cumulative_col].iloc[-1]:,.2f}")
+
     print("\n" + "=" * 80)
     print("ADDING NEW FORECAST INPUT ROW")
     print("=" * 80)
     new_data = {
-        'Opportunity name': 'New Client Corp',
-        'Sales \nagent': 'John Doe',
-        'Sales \nregion': 'US - Northeast',
-        'Sales \ncategory': 'Consulting',
-        'Forecast amount': 200000,
-        'Sales \nphase': 'Needs analysis',
-        'Probability of sale': 0.5,
-        'Forecast \nclose': datetime(2026, 12, 1),
-        'Weighted forecast': 100000
+        'Opportunity name': 'Agent Test Corp',
+        'Sales \nagent': 'Jules',
+        'Sales \nregion': 'US - West',
+        'Sales \ncategory': 'Products',
+        'Forecast amount': 50000,
+        'Sales \nphase': 'Proposal',
+        'Probability of sale': 0.75,
+        'Forecast \nclose': datetime(2027, 1, 1),
+        'Weighted forecast': 37500
     }
-    model.add_forecast_input_row(new_data)
-    
-    # Example: Read sales forecast data
-    print("\n" + "=" * 80)
-    print("READING SALES FORECAST DATA")
-    print("=" * 80)
-    forecast_df = model.read_sales_forecast()
-    print(forecast_df)
-    print(f"\nTotal Monthly Forecast: ${forecast_df['Monthly \nforecast'].sum():,.2f}")
-    print(f"Final Cumulative: ${forecast_df['Cumulative'].iloc[-1]:,.2f}")
+    new_row_num = model.add_forecast_input_row(new_data)
+    print(f"Data added to row {new_row_num}. The spreadsheet has been updated.")
